@@ -4,8 +4,8 @@
  *
  * This class is a slim wrapper around wkhtmltopdf.
  *
- * @author Michael Härtl <haertl.mike@gmail.com>
- * @version 1.2.2
+ * @author Michael Härtl <haertl.mike@gmail.com> (sponsored by PeoplePerHour.com)
+ * @version 1.2.0-dev
  * @license http://www.opensource.org/licenses/MIT
  */
 class WkHtmlToPdf
@@ -28,9 +28,7 @@ class WkHtmlToPdf
 
     protected $isWindows;
 
-    protected $enableXvfb = false;
-    protected $xvfbRunBin;
-    protected $xvfbRunOptions = ' --server-args="-screen 0, 1024x768x24" ';
+    protected $xvfbBin;
 
     protected $error;
 
@@ -41,9 +39,7 @@ class WkHtmlToPdf
         'enableEscaping',
         'version9',
         'procEnv',
-        'enableXvfb',
-        'xvfbRunBin',
-        'xvfbRunOptions',
+        'xvfbBin',
     );
 
     // Regular expression to detect HTML strings
@@ -123,15 +119,15 @@ class WkHtmlToPdf
         copy($pdfFile,$filename);
         return true;
     }
+    
 
     /**
      * Send PDF to client, either inline or as download (triggers PDF creation)
      *
-     * @param mixed $filename the filename to send. If empty, the PDF is streamed inline.
-     * @param bool $inline whether to force inline display of the PDF, even if filename is present.
+     * @param mixed $filename the filename to send. If empty, the PDF is streamed.
      * @return bool whether PDF was created successfully
      */
-    public function send($filename=null,$inline=false)
+    public function send($filename=null)
     {
         if (($pdfFile = $this->getPdfFilename())===false) {
             return false;
@@ -144,9 +140,8 @@ class WkHtmlToPdf
         header('Content-Transfer-Encoding: binary');
         header('Content-Length: '.filesize($pdfFile));
 
-        if ($filename!==null || $inline) {
-            $disposition = $inline ? 'inline' : 'attachment';
-            header("Content-Disposition: $inline; filename=\"$filename\"");
+        if ($filename!==null) {
+            header("Content-Disposition: attachment; filename=\"$filename\"");
         }
 
         readfile($pdfFile);
@@ -161,7 +156,7 @@ class WkHtmlToPdf
     public function setOptions($options)
     {
         foreach ($options as $key=>$val) {
-            if(in_array($key, $this->localOptions, true)) {
+            if(in_array($key, $this->localOptions)) {
                 $this->$key = $val;
             } elseif (is_int($key)) {
                 $this->options[] = $val;
@@ -197,16 +192,16 @@ class WkHtmlToPdf
     /**
      * @return string the full path to the xvfb-run binary
      */
-    public function getXvfbRunBin()
+    public function getXvfbBin()
     {
-        if ($this->xvfbRunBin===null) {
+        if ($this->xvfbBin===null) {
             if ($this->getIsWindows()) {
-                return null;
+                return '';
             } else {
-                $this->xvfbRunBin = trim(shell_exec('which xvfb-run'));
+                $this->xvfbBin = trim(shell_exec('which xvfb-run'));
             }
         }
-        return $this->xvfbRunBin;
+        return $this->xvfbBin;
     }
 
     /**
@@ -246,24 +241,23 @@ class WkHtmlToPdf
      */
     public function getCommand($filename)
     {
-        $command = $this->enableEscaping ? escapeshellarg($this->getBin()) : $this->getBin();
-
+        $command = "'/usr/bin/wkhtmltopdf'";//$this->enableEscaping ? escapeshellarg($this->getBin()) : $this->getBin();
         $command .= $this->renderOptions($this->options);
-
+		//print_r($command);
         foreach($this->objects as $object)
         {
             $command .= ' '.$object['input'];
             unset($object['input']);
             $command .= $this->renderOptions($object);
         }
-
+		
         return $command.' '.$filename;
     }
 
     /**
      * @return mixed the temporary PDF filename or false on error (triggers PDf creation)
      */
-    public function getPdfFilename()
+    protected function getPdfFilename()
     {
         if ($this->tmpFile===null) {
             $tmpFile = tempnam($this->getTmpDir(),'tmp_WkHtmlToPdf_');
@@ -284,10 +278,6 @@ class WkHtmlToPdf
     protected function createPdf($fileName)
     {
         $command = $this->getCommand($fileName);
-
-        if($this->enableXvfb) {
-            $command = $this->xvfbRunCommand($command);
-        }
 
         // we use proc_open with pipes to fetch error output
         $descriptors = array(
@@ -339,47 +329,23 @@ class WkHtmlToPdf
      */
     protected function renderOptions($options)
     {
+    	//print_r($options);
         $out = '';
         foreach($options as $key=>$val)
             if (is_numeric($key)) {
+            	
                 $out .= " --$val";
-            } elseif (is_array($val)) {
-                foreach($val as $vkey => $vval) {
-                    if(is_numeric($vkey)) {
-                        $out .= " --$key ".$this->escape($vval);
-                    } else {
-                        $out .= " --$key ".$this->escape($vkey).' '.$this->escape($vval);
-                    }
-                }
             } else {
-                $out .= " --$key ".$this->escape($val);
+            	if($key == 'bin')
+            	{
+	            	
+            	}
+            	else
+            	{
+                $out .= " --$key ".($this->enableEscaping ? escapeshellarg($val) : $val);
+            	}
             }
-
+			
         return $out;
-    }
-
-    /**
-     * @param mixed $val value to escape
-     * @return string the escaped value if enableEscaping is set. Unchanged value otherwhise.
-     */
-    protected function escape($val)
-    {
-        return $this->enableEscaping ? escapeshellarg($val) : $val;
-    }
-
-    /**
-     * Wrap the given command in a call to xvfb-run
-     *
-     * @param string $command the command to wrap in xvfb-run
-     * @return string the command string with the xvfb-run call prepended
-     */
-    protected function xvfbRunCommand($command)
-    {
-        $xvfbRun = $this->getXvfbRunBin();
-        if(!$xvfbRun) {
-            return $command;
-        }
-
-        return $xvfbRun.$this->xvfbRunOptions.$command;
     }
 }
